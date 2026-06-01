@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.pkl
+*.egg-info/
+.env
+data/sync_engine.db
+data/crm_records.json
+ml_scorer/models/
+.DS_Store
+*.log
+venv/
+.venv/

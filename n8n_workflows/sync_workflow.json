@@ -1,0 +1,164 @@
+{
+  "name": "ERP-CRM Sync Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 5 }] }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://crm-api:5001/api/deals",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "synced", "value": "0" },
+            { "name": "limit",  "value": "50" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-crm-deals",
+      "name": "Fetch Unsynced Deals",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "deals",
+        "options": {}
+      },
+      "id": "split-deals",
+      "name": "Split Into Individual Deals",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ml-scorer:5003/score",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "deal_id",      "value": "={{ $json.deal_id }}" },
+            { "name": "company_name", "value": "={{ $json.company_name }}" },
+            { "name": "contact_email","value": "={{ $json.contact_email }}" },
+            { "name": "contact_phone","value": "={{ $json.contact_phone }}" },
+            { "name": "industry",     "value": "={{ $json.industry }}" },
+            { "name": "region",       "value": "={{ $json.region }}" },
+            { "name": "deal_value",   "value": "={{ $json.deal_value }}" },
+            { "name": "currency",     "value": "={{ $json.currency }}" },
+            { "name": "deal_stage",   "value": "={{ $json.deal_stage }}" },
+            { "name": "close_date",   "value": "={{ $json.close_date }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ml-score",
+      "name": "ML Quality Scorer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "high-quality",
+              "leftValue":  "={{ $json.quality_score }}",
+              "rightValue": 75,
+              "operator": { "type": "number", "operation": "gte" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "route-by-score",
+      "name": "Route by Quality Score",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://erp-api:5002/api/orders",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "send-to-erp",
+      "name": "Send to ERP",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1340, 180]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=http://crm-api:5001/api/deals/{{ $json.deal_id }}/mark-synced",
+        "options": {}
+      },
+      "id": "mark-crm-synced",
+      "name": "Mark CRM Deal Synced",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1560, 180]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "1", "name": "deal_id",        "value": "={{ $json.deal_id }}",        "type": "string" },
+            { "id": "2", "name": "quality_score",  "value": "={{ $json.quality_score }}",  "type": "number" },
+            { "id": "3", "name": "quality_label",  "value": "={{ $json.quality_label }}",  "type": "string" },
+            { "id": "4", "name": "routed_to",       "value": "quarantine",                  "type": "string" },
+            { "id": "5", "name": "reason",          "value": "LOW_QUALITY_SCORE",           "type": "string" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "quarantine-record",
+      "name": "Quarantine Record",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [1340, 420]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger":         { "main": [[{ "node": "Fetch Unsynced Deals", "type": "main", "index": 0 }]] },
+    "Fetch Unsynced Deals":     { "main": [[{ "node": "Split Into Individual Deals", "type": "main", "index": 0 }]] },
+    "Split Into Individual Deals": { "main": [[{ "node": "ML Quality Scorer", "type": "main", "index": 0 }]] },
+    "ML Quality Scorer":        { "main": [[{ "node": "Route by Quality Score", "type": "main", "index": 0 }]] },
+    "Route by Quality Score":   {
+      "main": [
+        [{ "node": "Send to ERP",       "type": "main", "index": 0 }],
+        [{ "node": "Quarantine Record", "type": "main", "index": 0 }]
+      ]
+    },
+    "Send to ERP":              { "main": [[{ "node": "Mark CRM Deal Synced", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "last"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "erp-crm-sync-engine"
+  }
+}

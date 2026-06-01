@@ -1,0 +1,122 @@
+version: "3.9"
+
+# ── ERP-CRM Data Integrity Engine — Full Stack ────────────────────────────────
+# Services:
+#   crm-api      Flask mock CRM   :5001
+#   erp-api      Flask mock ERP   :5002
+#   ml-scorer    ML scorer API    :5003
+#   dashboard    Streamlit        :8501
+#   n8n          Workflow engine  :5678
+
+services:
+
+  crm-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    command: python crm_api/app.py
+    ports:
+      - "5001:5001"
+    environment:
+      - DB_PATH=/app/data/sync_engine.db
+      - CRM_PORT=5001
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - sync-net
+
+  erp-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    command: python erp_api/app.py
+    ports:
+      - "5002:5002"
+    environment:
+      - DB_PATH=/app/data/sync_engine.db
+      - ERP_PORT=5002
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5002/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      - crm-api
+    networks:
+      - sync-net
+
+  ml-scorer:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    command: python ml_scorer/scorer_api.py
+    ports:
+      - "5003:5003"
+    environment:
+      - DB_PATH=/app/data/sync_engine.db
+      - SCORER_PORT=5003
+    volumes:
+      - ./data:/app/data
+      - ./ml_scorer/models:/app/ml_scorer/models
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5003/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - sync-net
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    command: streamlit run dashboard/app.py --server.port=8501 --server.address=0.0.0.0
+    ports:
+      - "8501:8501"
+    environment:
+      - DB_PATH=/app/data/sync_engine.db
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - crm-api
+      - erp-api
+    networks:
+      - sync-net
+
+  n8n:
+    image: n8nio/n8n:latest
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=admin
+      - N8N_BASIC_AUTH_PASSWORD=sync_engine_2024
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://localhost:5678/
+      - GENERIC_TIMEZONE=Europe/Berlin
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n_workflows:/home/node/workflows
+    depends_on:
+      - crm-api
+      - erp-api
+      - ml-scorer
+    networks:
+      - sync-net
+
+volumes:
+  n8n_data:
+
+networks:
+  sync-net:
+    driver: bridge
